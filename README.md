@@ -15,7 +15,7 @@ The project aims to implement a smaller version of a language model to understan
 ### Prerequisites
 
 - Python 3.6+
-- Required packages: pandas, pyarrow, requests, tqdm
+- Required packages: pandas, pyarrow, requests, tqdm, tiktoken
 
 Install the required packages using the requirements.txt file:
 
@@ -47,6 +47,27 @@ Example with options:
 
 ```bash
 python main.py retrieve_data --samples 500 --output data/custom_data.txt
+```
+
+#### Tokenizing the Data
+
+After downloading the text data, you need to tokenize it for model training:
+
+```bash
+python main.py tokenize_data
+```
+
+This command will read the text from `data/text.txt`, tokenize it using the tiktoken library with the `cl100k_base` encoding, and save the tokens to `data/tokens.parquet`. It will also save token frequency information to `data/token_frequencies.parquet`.
+
+Options:
+- `--input`: Input text file path (default: data/text.txt)
+- `--output`: Output tokens parquet file path (default: data/tokens.parquet)
+- `--encoding`: Tiktoken encoding name (default: cl100k_base)
+
+Example with options:
+
+```bash
+python main.py tokenize_data --input data/custom_data.txt --output data/custom_tokens.parquet
 ```
 
 ## Training the Model
