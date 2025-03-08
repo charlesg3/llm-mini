@@ -4,7 +4,7 @@
   },
   "data_retrieval": {
     "base_url": "https://huggingface.co/datasets/HuggingFaceFW/fineweb/resolve/main/data/CC-MAIN-2013-20",
-    "num_samples": 20000,
+    "num_samples": 2000,
     "parquet_files": [
       "000_00000.parquet",
       "000_00001.parquet",
@@ -30,5 +30,8 @@
   },
   "tokenizer": {
     "encoding": "cl100k_base"
+  },
+  "assistant_data": {
+    "url": "https://huggingface.co/datasets/OpenAssistant/oasst1"
   }
 }

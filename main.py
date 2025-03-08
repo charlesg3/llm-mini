@@ -8,6 +8,7 @@ import argparse
 import sys
 import time
 from data_retrieval import download_fineweb_data, DEFAULT_NUM_SAMPLES
+from retrieve_assistant_data import download_assistant_data
 from tokenizer import tokenize
 from config import get_config
 
@@ -31,6 +32,28 @@ def retrieve_data(args):
     end_time = time.time()
     elapsed_time = end_time - start_time
     print(f"Data retrieval completed in {elapsed_time:.2f} seconds ({elapsed_time/60:.2f} minutes)")
+    
+    return result
+
+def retrieve_assistant_data_cmd(args):
+    """
+    Handle the retrieve_assistant_data command by calling the download_assistant_data function.
+    
+    Args:
+        args: Command line arguments
+    """
+    start_time = time.time()
+    print(f"Starting assistant data retrieval at {time.strftime('%Y-%m-%d %H:%M:%S')}")
+    
+    result = download_assistant_data(
+        output_dir=args.output_dir,
+        force=args.force,
+        lang=args.lang
+    )
+    
+    end_time = time.time()
+    elapsed_time = end_time - start_time
+    print(f"Assistant data retrieval completed in {elapsed_time:.2f} seconds ({elapsed_time/60:.2f} minutes)")
     
     return result
 
@@ -72,10 +95,12 @@ def main():
     
     # Add description of available commands
     parser.description += "\n\nAvailable commands:\n" + \
-                         "  retrieve_data    Download data from Hugging Face fineweb dataset\n" + \
-                         "                   Options: --force, --samples, --output, --cache-dir\n" + \
-                         "  tokenize_data    Tokenize text data using tiktoken\n" + \
-                         "                   Options: --input, --output, --encoding"
+                         "  retrieve_data            Download data from Hugging Face fineweb dataset\n" + \
+                         "                           Options: --force, --samples, --output, --cache-dir\n" + \
+                         "  retrieve_assistant_data  Download OpenAssistant Conversations Dataset\n" + \
+                         "                           Options: --force, --output-dir, --lang\n" + \
+                         "  tokenize_data            Tokenize text data using tiktoken\n" + \
+                         "                           Options: --input, --output, --encoding"
     
     subparsers = parser.add_subparsers(dest="command", help="Command to execute", metavar="command")
     
@@ -93,6 +118,19 @@ def main():
     retrieve_parser.add_argument("--samples", type=int, default=DEFAULT_NUM_SAMPLES, help=f"Number of samples to download (default: {DEFAULT_NUM_SAMPLES})")
     retrieve_parser.add_argument("--output", type=str, default="data/text.txt", help="Output file path")
     retrieve_parser.add_argument("--cache-dir", type=str, default="data/parquet_cache", help="Directory to cache parquet files")
+    
+    # Create the parser for the "retrieve_assistant_data" command
+    assistant_parser = subparsers.add_parser("retrieve_assistant_data",
+                                           help="Download OpenAssistant Conversations Dataset",
+                                           description="Download OpenAssistant Conversations Dataset.\n\n" +
+                                                      "Optional arguments:\n" +
+                                                      "  --force       Force overwrite of existing files\n" +
+                                                      "  --output-dir  Directory to store the downloaded data (default: data/assistant_data)\n" +
+                                                      "  --lang        Language code to filter for (default: 'en' for English)")
+    
+    assistant_parser.add_argument("--force", action="store_true", help="Force overwrite of existing files")
+    assistant_parser.add_argument("--output-dir", type=str, default="data/assistant_data", help="Directory to store the downloaded data")
+    assistant_parser.add_argument("--lang", type=str, default="en", help="Language code to filter for (default: 'en' for English)")
     
     # Create the parser for the "tokenize_data" command
     tokenize_parser = subparsers.add_parser("tokenize_data",
@@ -114,6 +152,9 @@ def main():
     if args.command == "retrieve_data":
         result = retrieve_data(args)
         sys.exit(0 if result > 0 else 1)
+    elif args.command == "retrieve_assistant_data":
+        result = retrieve_assistant_data_cmd(args)
+        sys.exit(0 if result else 1)
     elif args.command == "tokenize_data":
         result = tokenize_data(args)
         sys.exit(0 if result else 1)
