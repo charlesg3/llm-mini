@@ -7,8 +7,9 @@ This script provides a command-line interface for various data operations.
 import argparse
 import sys
 import time
-from data_retrieval import download_fineweb_data
+from data_retrieval import download_fineweb_data, DEFAULT_NUM_SAMPLES
 from tokenizer import tokenize
+from config import get_config
 
 def retrieve_data(args):
     """
@@ -59,6 +60,13 @@ def main():
     """
     Main entry point for the command-line interface.
     """
+    # Get encoding from config without providing a default
+    default_encoding = get_config('tokenizer/encoding')
+    if default_encoding is None:
+        print("Error: 'tokenizer/encoding' not found in configuration.")
+        print("Please set this value in config/config.json under the 'tokenizer' section.")
+        sys.exit(1)
+    
     # Create the top-level parser
     parser = argparse.ArgumentParser(description="LLM Mini Project CLI")
     
@@ -77,12 +85,12 @@ def main():
                                            description="Download data from Hugging Face fineweb dataset.\n\n" +
                                                       "Optional arguments:\n" +
                                                       "  --force       Force overwrite of existing output file\n" +
-                                                      "  --samples     Number of samples to download (default: 200)\n" +
+                                                      f"  --samples     Number of samples to download (default: {DEFAULT_NUM_SAMPLES})\n" +
                                                       "  --output      Output file path (default: data/text.txt)\n" +
                                                       "  --cache-dir   Directory to cache parquet files (default: data/parquet_cache)")
     
     retrieve_parser.add_argument("--force", action="store_true", help="Force overwrite of existing output file")
-    retrieve_parser.add_argument("--samples", type=int, default=200, help="Number of samples to download")
+    retrieve_parser.add_argument("--samples", type=int, default=DEFAULT_NUM_SAMPLES, help=f"Number of samples to download (default: {DEFAULT_NUM_SAMPLES})")
     retrieve_parser.add_argument("--output", type=str, default="data/text.txt", help="Output file path")
     retrieve_parser.add_argument("--cache-dir", type=str, default="data/parquet_cache", help="Directory to cache parquet files")
     
@@ -93,11 +101,11 @@ def main():
                                                       "Optional arguments:\n" +
                                                       "  --input       Input text file path (default: data/text.txt)\n" +
                                                       "  --output      Output tokens parquet file path (default: data/tokens.parquet)\n" +
-                                                      "  --encoding    Tiktoken encoding name (default: cl100k_base)")
+                                                      f"  --encoding    Tiktoken encoding name (default: {default_encoding})")
     
     tokenize_parser.add_argument("--input", type=str, default="data/text.txt", help="Input text file path")
     tokenize_parser.add_argument("--output", type=str, default="data/tokens.parquet", help="Output tokens parquet file path")
-    tokenize_parser.add_argument("--encoding", type=str, default="cl100k_base", help="Tiktoken encoding name")
+    tokenize_parser.add_argument("--encoding", type=str, default=default_encoding, help=f"Tiktoken encoding name (default: {default_encoding})")
     
     # Parse arguments
     args = parser.parse_args()

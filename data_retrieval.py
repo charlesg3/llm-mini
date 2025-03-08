@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Module for downloading webpages from the Hugging Face fineweb dataset.
-This script downloads 200 webpages and stores them in data/text.txt.
+This script downloads webpages and stores them in data/text.txt.
 It caches the parquet files in the data directory to avoid re-downloading.
 """
 
@@ -10,9 +10,13 @@ import json
 import requests
 import tempfile
 from tqdm import tqdm
+from config import get_config
 
-# Global base URL for the fineweb dataset
-BASE_URL = "https://huggingface.co/datasets/HuggingFaceFW/fineweb/resolve/main/data/CC-MAIN-2013-20"
+# Get default number of samples from config
+DEFAULT_NUM_SAMPLES = get_config('data_retrieval/num_samples')
+if DEFAULT_NUM_SAMPLES is None:
+    raise ValueError("Number of samples not found in configuration. Please set 'data_retrieval/num_samples' in config/config.json")
+DEFAULT_NUM_SAMPLES = int(DEFAULT_NUM_SAMPLES)
 
 def download_parquet(parquet_file, cache_dir):
     """
@@ -33,8 +37,13 @@ def download_parquet(parquet_file, cache_dir):
         print(f"Using cached {parquet_file}")
         return cached_file_path
     
+    # Get base URL from config
+    base_url = get_config('data_retrieval/base_url')
+    if not base_url:
+        raise ValueError("Base URL not found in configuration. Please set 'data_retrieval/base_url' in config/config.json")
+    
     print(f"Downloading {parquet_file}...")
-    url = f"{BASE_URL}/{parquet_file}"
+    url = f"{base_url}/{parquet_file}"
     
     try:
         # Download the parquet file
@@ -56,12 +65,12 @@ def download_parquet(parquet_file, cache_dir):
         print(f"Error downloading {parquet_file}: {e}")
         return None
 
-def download_fineweb_data(num_samples=200, output_file="data/text.txt", cache_dir="data/parquet_cache", force=False):
+def download_fineweb_data(num_samples=DEFAULT_NUM_SAMPLES, output_file="data/text.txt", cache_dir="data/parquet_cache", force=False):
     """
     Download samples from the Hugging Face fineweb dataset.
     
     Args:
-        num_samples (int): Number of webpages to download
+        num_samples (int): Number of webpages to download. Defaults to value from config.
         output_file (str): Path to the output file
         cache_dir (str): Directory to cache downloaded parquet files
         force (bool): If True, overwrite existing output file
@@ -73,13 +82,11 @@ def download_fineweb_data(num_samples=200, output_file="data/text.txt", cache_di
     if os.path.exists(output_file) and not force:
         print(f"Output file {output_file} already exists. Use force=True to overwrite.")
         return 0
-    # List of parquet files to try with the correct format "000_00000.parquet"
-    parquet_files = [
-        "000_00000.parquet", "000_00001.parquet", "000_00002.parquet", "000_00003.parquet", "000_00004.parquet",
-        "000_00005.parquet", "000_00006.parquet", "000_00007.parquet", "000_00008.parquet", "000_00009.parquet",
-        "000_00010.parquet", "000_00011.parquet", "000_00012.parquet", "000_00013.parquet", "000_00014.parquet",
-        "000_00015.parquet", "000_00016.parquet", "000_00017.parquet", "000_00018.parquet", "000_00019.parquet"
-    ]
+    
+    # Get parquet files list from config
+    parquet_files = get_config('data_retrieval/parquet_files')
+    if not parquet_files:
+        raise ValueError("Parquet files list not found in configuration. Please set 'data_retrieval/parquet_files' in config/config.json")
     
     print(f"Downloading up to {num_samples} samples from the fineweb dataset...")
     
