@@ -10,6 +10,9 @@ The project aims to implement a smaller version of a language model to understan
 - `data_retrieval.py`: Module for downloading training data
 - `retrieve_assistant_data.py`: Module for downloading assistant conversation data
 - `config.py`: Configuration management module
+- `model.py`: Implementation of a GPT-2 style transformer model
+- `training.py`: Training functionality for the model on web text data
+- `fine_tune_assistant.py`: Fine-tuning functionality for the model on assistant conversations
 - `data/`: Directory containing training data and cached files
 
 ## Getting Started
@@ -17,7 +20,7 @@ The project aims to implement a smaller version of a language model to understan
 ### Prerequisites
 
 - Python 3.6+
-- Required packages: pandas, pyarrow, requests, tqdm, tiktoken, datasets
+- Required packages: pandas, pyarrow, requests, tqdm, tiktoken, datasets, torch
 
 Install the required packages using the requirements.txt file:
 
@@ -80,12 +83,12 @@ After downloading the text data, you need to tokenize it for model training:
 python main.py tokenize_data
 ```
 
-This command will read the text from `data/text.txt`, tokenize it using the tiktoken library with the `cl100k_base` encoding, and save the tokens to `data/tokens.parquet`. It will also save token frequency information to `data/token_frequencies.parquet`.
+This command will read the text from `data/text.txt`, tokenize it using the tiktoken library with the encoding specified in your config, and save the tokens to `data/tokens.parquet`. It will also save token frequency information to `data/token_frequencies.parquet`.
 
 Options:
 - `--input`: Input text file path (default: data/text.txt)
 - `--output`: Output tokens parquet file path (default: data/tokens.parquet)
-- `--encoding`: Tiktoken encoding name (default: cl100k_base)
+- `--encoding`: Tiktoken encoding name (default: from config)
 
 Example with options:
 
@@ -93,9 +96,64 @@ Example with options:
 python main.py tokenize_data --input data/custom_data.txt --output data/custom_tokens.parquet
 ```
 
-## Training the Model
+#### Training the Model
 
-After downloading the data, you can proceed with training the model following Andrej Karpathy's tutorial.
+To train a GPT model on the tokenized web text data:
+
+```bash
+python main.py train
+```
+
+This command will train a GPT model on the tokenized data and save checkpoints to `checkpoints/web/`.
+
+Options:
+- `--input`: Input tokens file (default: data/tokens.parquet)
+- `--output-dir`: Directory to save checkpoints (default: checkpoints/web)
+- `--model-size`: Model size (micro or mini, default: micro)
+- `--batch-size`: Batch size for training (default: 8)
+- `--epochs`: Number of epochs to train (default: 3)
+- `--save-every`: Save checkpoint every N epochs (default: 1)
+- `--eval-every`: Evaluate on validation set every N epochs (default: 1)
+- `--checkpoint`: Path to checkpoint to resume from
+- `--sample`: Sample from the model after training
+- `--prompt`: Prompt for sampling (default: "Once upon a time")
+- `--max-tokens`: Maximum tokens to generate (default: 50)
+- `--temperature`: Sampling temperature (default: 0.8)
+
+Example with options:
+
+```bash
+python main.py train --model-size mini --batch-size 4 --epochs 5 --sample
+```
+
+#### Fine-tuning on Assistant Conversations
+
+To fine-tune a GPT model on assistant conversations:
+
+```bash
+python main.py finetune
+```
+
+This command will fine-tune a GPT model on the assistant conversation data and save checkpoints to `checkpoints/assistant/`.
+
+Options:
+- `--input`: Input assistant data file (default: data/assistant_data/assistant_data.json)
+- `--output-dir`: Directory to save checkpoints (default: checkpoints/assistant)
+- `--batch-size`: Batch size for training (default: 4)
+- `--epochs`: Number of epochs to train (default: 5)
+- `--save-every`: Save checkpoint every N epochs (default: 1)
+- `--eval-every`: Evaluate on validation set every N epochs (default: 1)
+- `--checkpoint`: Path to checkpoint to resume from
+- `--sample`: Sample from the model after training
+- `--prompt`: Prompt for sampling (default: "User: How do I implement a transformer model in PyTorch?\n\nAssistant:")
+- `--max-tokens`: Maximum tokens to generate (default: 200)
+- `--temperature`: Sampling temperature (default: 0.7)
+
+Example with options:
+
+```bash
+python main.py finetune --batch-size 2 --epochs 10 --sample
+```
 
 ## License
 

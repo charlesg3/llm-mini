@@ -11,6 +11,8 @@ from data_retrieval import download_fineweb_data, DEFAULT_NUM_SAMPLES
 from retrieve_assistant_data import download_assistant_data
 from tokenizer import tokenize
 from config import get_config
+from training import train_model
+from fine_tune_assistant import train_assistant_model
 
 def retrieve_data(args):
     """
@@ -79,6 +81,42 @@ def tokenize_data(args):
     
     return len(token_counts) > 0
 
+def train_cmd(args):
+    """
+    Handle the train command by calling the train_model function.
+    
+    Args:
+        args: Command line arguments
+    """
+    start_time = time.time()
+    print(f"Starting model training at {time.strftime('%Y-%m-%d %H:%M:%S')}")
+    
+    result = train_model(args)
+    
+    end_time = time.time()
+    elapsed_time = end_time - start_time
+    print(f"Model training completed in {elapsed_time:.2f} seconds ({elapsed_time/60:.2f} minutes)")
+    
+    return result
+
+def finetune_cmd(args):
+    """
+    Handle the finetune command by calling the train_assistant_model function.
+    
+    Args:
+        args: Command line arguments
+    """
+    start_time = time.time()
+    print(f"Starting assistant model fine-tuning at {time.strftime('%Y-%m-%d %H:%M:%S')}")
+    
+    result = train_assistant_model(args)
+    
+    end_time = time.time()
+    elapsed_time = end_time - start_time
+    print(f"Assistant model fine-tuning completed in {elapsed_time:.2f} seconds ({elapsed_time/60:.2f} minutes)")
+    
+    return result
+
 def main():
     """
     Main entry point for the command-line interface.
@@ -96,11 +134,10 @@ def main():
     # Add description of available commands
     parser.description += "\n\nAvailable commands:\n" + \
                          "  retrieve_data            Download data from Hugging Face fineweb dataset\n" + \
-                         "                           Options: --force, --samples, --output, --cache-dir\n" + \
                          "  retrieve_assistant_data  Download OpenAssistant Conversations Dataset\n" + \
-                         "                           Options: --force, --output-dir, --lang\n" + \
                          "  tokenize_data            Tokenize text data using tiktoken\n" + \
-                         "                           Options: --input, --output, --encoding"
+                         "  train                    Train a GPT model on tokenized data\n" + \
+                         "  finetune                 Fine-tune a GPT model on assistant conversations"
     
     subparsers = parser.add_subparsers(dest="command", help="Command to execute", metavar="command")
     
@@ -145,6 +182,54 @@ def main():
     tokenize_parser.add_argument("--output", type=str, default="data/tokens.parquet", help="Output tokens parquet file path")
     tokenize_parser.add_argument("--encoding", type=str, default=default_encoding, help=f"Tiktoken encoding name (default: {default_encoding})")
     
+    # Create the parser for the "train" command
+    train_parser = subparsers.add_parser("train",
+                                        help="Train a GPT model on tokenized data",
+                                        description="Train a GPT model on tokenized data.\n\n" +
+                                                   "Optional arguments:\n" +
+                                                   "  --input        Input tokens file (default: data/tokens.parquet)\n" +
+                                                   "  --output-dir   Directory to save checkpoints (default: checkpoints/web)\n" +
+                                                   "  --model-size   Model size (micro or mini, default: from config)\n" +
+                                                   "  --batch-size   Batch size for training (default: from config)\n" +
+                                                   "  --epochs       Number of epochs to train (default: from config)\n" +
+                                                   "  --checkpoint   Path to checkpoint to resume from")
+    
+    train_parser.add_argument("--input", type=str, default="data/tokens.parquet", help="Input tokens file")
+    train_parser.add_argument("--output-dir", type=str, default="checkpoints/web", help="Directory to save checkpoints")
+    train_parser.add_argument("--model-size", type=str, choices=["micro", "mini"], help="Model size (default: from config)")
+    train_parser.add_argument("--batch-size", type=int, help="Batch size (default: from config)")
+    train_parser.add_argument("--epochs", type=int, help="Number of epochs (default: from config)")
+    train_parser.add_argument("--save-every", type=int, help="Save checkpoint every N epochs (default: from config)")
+    train_parser.add_argument("--eval-every", type=int, help="Evaluate every N epochs (default: from config)")
+    train_parser.add_argument("--checkpoint", type=str, default=None, help="Path to checkpoint to resume from")
+    train_parser.add_argument("--sample", action="store_true", help="Sample from the model after training")
+    train_parser.add_argument("--prompt", type=str, help="Prompt for sampling (default: from config)")
+    train_parser.add_argument("--max-tokens", type=int, help="Maximum tokens to generate (default: from config)")
+    train_parser.add_argument("--temperature", type=float, help="Sampling temperature (default: from config)")
+    
+    # Create the parser for the "finetune" command
+    finetune_parser = subparsers.add_parser("finetune",
+                                           help="Fine-tune a GPT model on assistant conversations",
+                                           description="Fine-tune a GPT model on assistant conversations.\n\n" +
+                                                      "Optional arguments:\n" +
+                                                      "  --input        Input assistant data file (default: data/assistant_data/assistant_data.json)\n" +
+                                                      "  --output-dir   Directory to save checkpoints (default: checkpoints/assistant)\n" +
+                                                      "  --batch-size   Batch size for training (default: 4)\n" +
+                                                      "  --epochs       Number of epochs to train (default: 5)\n" +
+                                                      "  --checkpoint   Path to checkpoint to resume from")
+    
+    finetune_parser.add_argument("--input", type=str, default="data/assistant_data/assistant_data.json", help="Input assistant data file")
+    finetune_parser.add_argument("--output-dir", type=str, default="checkpoints/assistant", help="Directory to save checkpoints")
+    finetune_parser.add_argument("--batch-size", type=int, default=4, help="Batch size")
+    finetune_parser.add_argument("--epochs", type=int, default=5, help="Number of epochs")
+    finetune_parser.add_argument("--save-every", type=int, default=1, help="Save checkpoint every N epochs")
+    finetune_parser.add_argument("--eval-every", type=int, default=1, help="Evaluate every N epochs")
+    finetune_parser.add_argument("--checkpoint", type=str, default=None, help="Path to checkpoint to resume from")
+    finetune_parser.add_argument("--sample", action="store_true", help="Sample from the model after training")
+    finetune_parser.add_argument("--prompt", type=str, default="User: How do I implement a transformer model in PyTorch?\n\nAssistant:", help="Prompt for sampling")
+    finetune_parser.add_argument("--max-tokens", type=int, default=200, help="Maximum tokens to generate")
+    finetune_parser.add_argument("--temperature", type=float, default=0.7, help="Sampling temperature")
+    
     # Parse arguments
     args = parser.parse_args()
     
@@ -157,6 +242,12 @@ def main():
         sys.exit(0 if result else 1)
     elif args.command == "tokenize_data":
         result = tokenize_data(args)
+        sys.exit(0 if result else 1)
+    elif args.command == "train":
+        result = train_cmd(args)
+        sys.exit(0 if result else 1)
+    elif args.command == "finetune":
+        result = finetune_cmd(args)
         sys.exit(0 if result else 1)
     elif args.command is None:
         parser.print_help()
