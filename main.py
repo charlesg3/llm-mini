@@ -11,7 +11,7 @@ from data_retrieval import download_fineweb_data, DEFAULT_NUM_SAMPLES
 from retrieve_assistant_data import download_assistant_data
 from tokenizer import tokenize
 from config import get_config
-from training import train_model
+from train_model import train_model
 from fine_tune_assistant import train_assistant_model
 
 def retrieve_data(args):
@@ -206,6 +206,7 @@ def main():
     train_parser.add_argument("--prompt", type=str, help="Prompt for sampling (default: from config)")
     train_parser.add_argument("--max-tokens", type=int, help="Maximum tokens to generate (default: from config)")
     train_parser.add_argument("--temperature", type=float, help="Sampling temperature (default: from config)")
+    train_parser.add_argument("--multi-gpu", action="store_true", help="Use multiple GPUs for training if available")
     
     # Create the parser for the "finetune" command
     finetune_parser = subparsers.add_parser("finetune",
@@ -229,6 +230,7 @@ def main():
     finetune_parser.add_argument("--prompt", type=str, default="User: How do I implement a transformer model in PyTorch?\n\nAssistant:", help="Prompt for sampling")
     finetune_parser.add_argument("--max-tokens", type=int, default=200, help="Maximum tokens to generate")
     finetune_parser.add_argument("--temperature", type=float, default=0.7, help="Sampling temperature")
+    finetune_parser.add_argument("--multi-gpu", action="store_true", help="Use multiple GPUs for training if available")
     
     # Parse arguments
     args = parser.parse_args()

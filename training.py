@@ -9,56 +9,13 @@ import time
 import math
 import torch
 import torch.nn.functional as F
-from torch.utils.data import Dataset, DataLoader
+from torch.utils.data import DataLoader
 import numpy as np
 from tqdm import tqdm
 import pandas as pd
-import pyarrow.parquet as pq
 from model import GPT, get_gpt2_micro_config, get_gpt2_mini_config
 from config import get_config
-
-
-class TokenDataset(Dataset):
-    """
-    Dataset for training the GPT model on token sequences.
-    """
-    def __init__(self, tokens_file, block_size):
-        """
-        Initialize the dataset.
-        
-        Args:
-            tokens_file: Path to the parquet file containing tokenized data
-            block_size: Size of the context window for the model
-        """
-        self.block_size = block_size
-        
-        # Load tokens from parquet file
-        print(f"Loading tokens from {tokens_file}...")
-        table = pq.read_table(tokens_file)
-        df = table.to_pandas()
-        
-        # Check if the dataframe has the expected format
-        if 'token_id' in df.columns:
-            # Format from tokenizer.py - a single column of token IDs
-            self.tokens = df['token_id'].values
-        else:
-            # Try to handle other formats or raise an error
-            print(f"Warning: Expected 'token_id' column not found in {tokens_file}")
-            print(f"Available columns: {df.columns.tolist()}")
-            raise ValueError(f"Could not find token data in {tokens_file}")
-        
-        print(f"Loaded {len(self.tokens)} tokens")
-    
-    def __len__(self):
-        # Return the number of possible starting positions for sequences
-        return max(0, len(self.tokens) - self.block_size)
-    
-    def __getitem__(self, idx):
-        # Grab a chunk of tokens starting at position idx
-        chunk = self.tokens[idx:idx + self.block_size + 1]
-        x = torch.tensor(chunk[:-1], dtype=torch.long)
-        y = torch.tensor(chunk[1:], dtype=torch.long)
-        return x, y
+from token_dataset import TokenDataset
 
 
 class Trainer:
@@ -79,6 +36,7 @@ class Trainer:
         batch_size=64,
         device='cuda' if torch.cuda.is_available() else 'cpu',
         checkpoint_dir='checkpoints',
+        use_multi_gpu=True,
     ):
         """
         Initialize the trainer.
@@ -96,6 +54,7 @@ class Trainer:
             batch_size: Batch size for training
             device: Device to train on ('cuda' or 'cpu')
             checkpoint_dir: Directory to save checkpoints
+            use_multi_gpu: Whether to use multiple GPUs if available
         """
         self.model = model
         self.train_dataset = train_dataset
@@ -120,10 +79,18 @@ class Trainer:
         self.batch_size = batch_size
         self.device = device
         self.checkpoint_dir = checkpoint_dir
+        self.use_multi_gpu = use_multi_gpu
         
         # Create checkpoint directory if it doesn't exist
         os.makedirs(checkpoint_dir, exist_ok=True)
         
+        # Check for multiple GPUs and use DataParallel if available and requested
+        if self.use_multi_gpu and torch.cuda.is_available() and torch.cuda.device_count() > 1:
+            print(f"Using {torch.cuda.device_count()} GPUs for training")
+            self.model = torch.nn.DataParallel(model)
+        else:
+            self.model = model
+            
         # Move model to device
         self.model.to(device)
         
@@ -139,12 +106,18 @@ class Trainer:
         self.tokens = 0  # Counter for number of tokens processed
         self.best_val_loss = float('inf')
         
-        # Create data loaders
+        # Create data loaders with multi-process loading
+        # Use 4 workers by default, can be adjusted based on CPU cores
+        num_workers = 4
+        print(f"Using {num_workers} worker processes for data loading")
+        
         self.train_loader = DataLoader(
             train_dataset,
             batch_size=batch_size,
             shuffle=True,
             pin_memory=True,
+            num_workers=num_workers,
+            persistent_workers=True,  # Keep workers alive between iterations
         )
         
         if val_dataset:
@@ -153,6 +126,8 @@ class Trainer:
                 batch_size=batch_size,
                 shuffle=False,
                 pin_memory=True,
+                num_workers=num_workers,
+                persistent_workers=True,
             )
         else:
             self.val_loader = None
@@ -180,14 +155,22 @@ class Trainer:
         """
         self.model.train()
         losses = []
-        pbar = tqdm(enumerate(self.train_loader), total=len(self.train_loader), desc="Training")
+        total_batches = len(self.train_loader)
+        pbar = tqdm(enumerate(self.train_loader), total=total_batches, desc="Training")
         
         for it, (x, y) in pbar:
-            # Move batch to device
-            x, y = x.to(self.device), y.to(self.device)
+            # Add debug print to track progress
+            if it == 0:
+                print(f"Starting first batch processing at {time.strftime('%H:%M:%S')}")
+                
+            # Move batch to device with non-blocking transfer
+            x, y = x.to(self.device, non_blocking=True), y.to(self.device, non_blocking=True)
             
             # Forward pass
             logits, loss = self.model(x, y)
+            # Handle multi-GPU case where loss is a tensor array
+            if isinstance(loss, torch.Tensor) and loss.numel() > 1:
+                loss = loss.mean()
             losses.append(loss.item())
             
             # Update learning rate
@@ -206,8 +189,20 @@ class Trainer:
             # Update weights
             self.optimizer.step()
             
-            # Update progress bar
-            pbar.set_description(f"Training (loss: {loss.item():.4f}, lr: {lr:.6f})")
+            # Calculate running average loss
+            avg_loss = sum(losses[-100:]) / min(len(losses), 100)  # Moving average of last 100 batches
+            
+            # Update progress bar with detailed information
+            progress_percent = (it + 1) / total_batches * 100
+            pbar.set_description(f"Training [{it+1}/{total_batches} ({progress_percent:.1f}%)] - loss: {loss.item():.4f}, avg_loss: {avg_loss:.4f}, lr: {lr:.6f}")
+            
+            # Print progress every 10% of batches or at least every 10 batches
+            if (it + 1) % max(1, min(total_batches // 10, 10)) == 0:
+                print(f"Progress: {progress_percent:.1f}% - Batch {it+1}/{total_batches}, Loss: {loss.item():.4f}, Avg Loss: {avg_loss:.4f}, LR: {lr:.6f}")
+            
+            # Add debug print for first few batches
+            if it < 3:
+                print(f"Completed batch {it+1} at {time.strftime('%H:%M:%S')}")
         
         return sum(losses) / len(losses)
     
@@ -223,15 +218,38 @@ class Trainer:
         
         self.model.eval()
         losses = []
+        total_batches = len(self.val_loader)
         
         with torch.no_grad():
-            for x, y in tqdm(self.val_loader, desc="Validating"):
-                # Move batch to device
-                x, y = x.to(self.device), y.to(self.device)
+            pbar = tqdm(enumerate(self.val_loader), total=total_batches, desc="Validating")
+            
+            for i, (x, y) in pbar:
+                # Add debug print for first batch
+                if i == 0:
+                    print(f"Starting first validation batch at {time.strftime('%H:%M:%S')}")
+                    
+                # Move batch to device with non-blocking transfer
+                x, y = x.to(self.device, non_blocking=True), y.to(self.device, non_blocking=True)
                 
                 # Forward pass
                 logits, loss = self.model(x, y)
+                # Handle multi-GPU case where loss is a tensor array
+                if isinstance(loss, torch.Tensor) and loss.numel() > 1:
+                    loss = loss.mean()
                 losses.append(loss.item())
+                
+                # Update progress bar
+                avg_loss = sum(losses) / len(losses)
+                progress_percent = (i + 1) / total_batches * 100
+                pbar.set_description(f"Validating [{i+1}/{total_batches} ({progress_percent:.1f}%)] - loss: {loss.item():.4f}, avg_loss: {avg_loss:.4f}")
+                
+                # Print progress more frequently
+                if (i + 1) % max(1, min(total_batches // 5, 10)) == 0:
+                    print(f"Validation progress: {progress_percent:.1f}% - Batch {i+1}/{total_batches}, Loss: {loss.item():.4f}, Avg Loss: {avg_loss:.4f}")
+                
+                # Add debug print for first few batches
+                if i < 3:
+                    print(f"Completed validation batch {i+1} at {time.strftime('%H:%M:%S')}")
         
         return sum(losses) / len(losses)
     
@@ -244,13 +262,16 @@ class Trainer:
             loss: Current loss value
             is_best: Whether this is the best model so far
         """
+        # If using DataParallel, save the underlying model
+        model_to_save = self.model.module if hasattr(self.model, 'module') else self.model
+        
         checkpoint = {
             'epoch': epoch,
-            'model_state_dict': self.model.state_dict(),
+            'model_state_dict': model_to_save.state_dict(),
             'optimizer_state_dict': self.optimizer.state_dict(),
             'loss': loss,
             'tokens': self.tokens,
-            'config': self.model.config,
+            'config': model_to_save.config,
         }
         
         # Save regular checkpoint
@@ -295,29 +316,59 @@ class Trainer:
         start_time = time.time()
         
         for epoch in range(num_epochs):
-            print(f"\nEpoch {epoch+1}/{num_epochs}")
+            epoch_start_time = time.time()
+            print(f"\nEpoch {epoch+1}/{num_epochs} starting at {time.strftime('%H:%M:%S')}")
             
             # Train for one epoch
+            print(f"Starting training epoch {epoch+1} at {time.strftime('%H:%M:%S')}")
             train_loss = self.train_epoch()
-            print(f"Train loss: {train_loss:.4f}")
+            epoch_duration = time.time() - epoch_start_time
+            print(f"Train loss: {train_loss:.4f} (took {epoch_duration:.2f}s)")
             
             # Evaluate on validation set
             if self.val_loader and (epoch + 1) % eval_every == 0:
+                val_start_time = time.time()
+                print(f"Starting validation at {time.strftime('%H:%M:%S')}")
                 val_loss = self.validate()
-                print(f"Validation loss: {val_loss:.4f}")
+                val_duration = time.time() - val_start_time
+                print(f"Validation loss: {val_loss:.4f} (took {val_duration:.2f}s)")
                 is_best = val_loss < self.best_val_loss
                 if is_best:
                     self.best_val_loss = val_loss
+                    print(f"New best validation loss: {val_loss:.4f}")
             else:
                 is_best = False
             
             # Save checkpoint
             if (epoch + 1) % save_every == 0:
+                checkpoint_start_time = time.time()
+                print(f"Saving checkpoint at {time.strftime('%H:%M:%S')}")
                 self.save_checkpoint(epoch + 1, train_loss, is_best)
+                checkpoint_duration = time.time() - checkpoint_start_time
+                print(f"Checkpoint saved (took {checkpoint_duration:.2f}s)")
+            
+            # Calculate ETA
+            elapsed_time = time.time() - start_time
+            avg_epoch_time = elapsed_time / (epoch + 1)
+            remaining_epochs = num_epochs - (epoch + 1)
+            eta_seconds = avg_epoch_time * remaining_epochs
+            eta_minutes = eta_seconds / 60
+            eta_hours = eta_minutes / 60
+            
+            if remaining_epochs > 0:
+                if eta_hours >= 1:
+                    print(f"Progress: {epoch+1}/{num_epochs} epochs ({(epoch+1)/num_epochs*100:.1f}%) - ETA: {eta_hours:.1f} hours")
+                elif eta_minutes >= 1:
+                    print(f"Progress: {epoch+1}/{num_epochs} epochs ({(epoch+1)/num_epochs*100:.1f}%) - ETA: {eta_minutes:.1f} minutes")
+                else:
+                    print(f"Progress: {epoch+1}/{num_epochs} epochs ({(epoch+1)/num_epochs*100:.1f}%) - ETA: {eta_seconds:.1f} seconds")
         
         # Calculate total training time
         total_time = time.time() - start_time
-        print(f"\nTraining completed in {total_time/60:.2f} minutes")
+        hours, remainder = divmod(total_time, 3600)
+        minutes, seconds = divmod(remainder, 60)
+        
+        print(f"\nTraining completed in {int(hours)}h {int(minutes)}m {seconds:.2f}s")
         print(f"Best validation loss: {self.best_val_loss:.4f}")
 
 
@@ -336,15 +387,21 @@ def sample_from_model(model, tokenizer, prompt, max_new_tokens=100, temperature=
     Returns:
         Generated text
     """
-    model.eval()
-    device = next(model.parameters()).device
+    # If using DataParallel, use the underlying model for generation
+    if hasattr(model, 'module'):
+        generation_model = model.module
+    else:
+        generation_model = model
+        
+    generation_model.eval()
+    device = next(generation_model.parameters()).device
     
     # Encode the prompt
     input_ids = torch.tensor(tokenizer.encode(prompt)).unsqueeze(0).to(device)
     
     # Generate
     with torch.no_grad():
-        output_ids = model.generate(
+        output_ids = generation_model.generate(
             input_ids,
             max_new_tokens=max_new_tokens,
             temperature=temperature,
@@ -354,162 +411,3 @@ def sample_from_model(model, tokenizer, prompt, max_new_tokens=100, temperature=
     # Decode the output
     output_text = tokenizer.decode(output_ids[0].tolist())
     return output_text
-
-
-def train_model(args):
-    """
-    Train a model on the token dataset.
-    
-    Args:
-        args: Command line arguments
-    
-    Returns:
-        True if training was successful, False otherwise
-    """
-    import tiktoken
-    
-    # Load tokenizer using encoding from config
-    encoding_name = get_config('tokenizer/encoding')
-    if not encoding_name:
-        print("Error: 'tokenizer/encoding' not found in configuration.")
-        print("Please set this value in config/config.json under the 'tokenizer' section.")
-        return False
-    
-    print(f"Using tokenizer encoding: {encoding_name}")
-    tokenizer = tiktoken.get_encoding(encoding_name)
-    
-    # Get model size from config or args
-    model_size = args.model_size if args.model_size else get_config('training/model_size')
-    if not model_size:
-        print("Error: Model size not specified in args or config.")
-        print("Please set 'training/model_size' in config/config.json or use --model-size.")
-        return False
-    
-    # Create a model for training
-    if model_size == "micro":
-        config = get_gpt2_micro_config()
-    elif model_size == "mini":
-        config = get_gpt2_mini_config()
-    else:
-        print(f"Unknown model size: {model_size}")
-        return False
-    
-    config.vocab_size = tokenizer.n_vocab
-    model = GPT(config)
-    
-    # Create dataset from token data
-    tokens_file = args.input
-    if not os.path.exists(tokens_file):
-        print(f"Error: Tokens file not found at {tokens_file}")
-        print("Please run 'python main.py tokenize_data' first.")
-        return False
-    
-    dataset = TokenDataset(tokens_file, block_size=config.block_size)
-    
-    # Split into train and validation
-    train_size = int(0.9 * len(dataset))
-    val_size = len(dataset) - train_size
-    train_dataset, val_dataset = torch.utils.data.random_split(dataset, [train_size, val_size])
-    
-    # Get batch size from config or args
-    batch_size = args.batch_size if args.batch_size else get_config('training/batch_size')
-    if not batch_size:
-        print("Error: Batch size not specified in args or config.")
-        print("Please set 'training/batch_size' in config/config.json or use --batch-size.")
-        return False
-    
-    # Create trainer
-    trainer = Trainer(
-        model=model,
-        train_dataset=train_dataset,
-        val_dataset=val_dataset,
-        batch_size=batch_size,
-        checkpoint_dir=args.output_dir,
-    )
-    
-    # Load checkpoint if specified
-    if args.checkpoint:
-        if os.path.exists(args.checkpoint):
-            trainer.load_checkpoint(args.checkpoint)
-        else:
-            print(f"Warning: Checkpoint file {args.checkpoint} not found. Starting from scratch.")
-    
-    # Get epochs from config or args
-    epochs = args.epochs if args.epochs else get_config('training/epochs')
-    if not epochs:
-        print("Error: Number of epochs not specified in args or config.")
-        print("Please set 'training/epochs' in config/config.json or use --epochs.")
-        return False
-    
-    # Get save_every from config or args
-    save_every = args.save_every if args.save_every else get_config('training/save_every')
-    if not save_every:
-        print("Error: save_every not specified in args or config.")
-        print("Please set 'training/save_every' in config/config.json or use --save-every.")
-        return False
-    
-    # Get eval_every from config or args
-    eval_every = args.eval_every if args.eval_every else get_config('training/eval_every')
-    if not eval_every:
-        print("Error: eval_every not specified in args or config.")
-        print("Please set 'training/eval_every' in config/config.json or use --eval-every.")
-        return False
-    
-    # Train for specified number of epochs
-    trainer.train(num_epochs=epochs, save_every=save_every, eval_every=eval_every)
-    
-    # Sample from the model if requested
-    if args.sample:
-        # Get prompt from config or args
-        prompt = args.prompt if args.prompt else get_config('training/prompt')
-        if not prompt:
-            print("Error: Prompt not specified in args or config.")
-            print("Please set 'training/prompt' in config/config.json or use --prompt.")
-            return False
-        
-        # Get max_tokens from config or args
-        max_tokens = args.max_tokens if args.max_tokens else get_config('training/max_tokens')
-        if not max_tokens:
-            print("Error: max_tokens not specified in args or config.")
-            print("Please set 'training/max_tokens' in config/config.json or use --max-tokens.")
-            return False
-        
-        # Get temperature from config or args
-        temperature = args.temperature if args.temperature else get_config('training/temperature')
-        if not temperature:
-            print("Error: temperature not specified in args or config.")
-            print("Please set 'training/temperature' in config/config.json or use --temperature.")
-            return False
-        
-        sample_text = sample_from_model(
-            model=model,
-            tokenizer=tokenizer,
-            prompt=prompt,
-            max_new_tokens=max_tokens,
-            temperature=temperature,
-        )
-        print("\nSample text:")
-        print(sample_text)
-    
-    return True
-
-
-if __name__ == "__main__":
-    import argparse
-    
-    parser = argparse.ArgumentParser(description="Train a GPT model on token data")
-    parser.add_argument("--input", type=str, default="data/tokens.parquet", help="Input tokens file")
-    parser.add_argument("--output-dir", type=str, default="checkpoints/web", help="Directory to save checkpoints")
-    parser.add_argument("--model-size", type=str, default="micro", choices=["micro", "mini"], help="Model size")
-    parser.add_argument("--batch-size", type=int, default=8, help="Batch size")
-    parser.add_argument("--epochs", type=int, default=3, help="Number of epochs")
-    parser.add_argument("--save-every", type=int, default=1, help="Save checkpoint every N epochs")
-    parser.add_argument("--eval-every", type=int, default=1, help="Evaluate every N epochs")
-    parser.add_argument("--checkpoint", type=str, default=None, help="Path to checkpoint to resume from")
-    parser.add_argument("--sample", action="store_true", help="Sample from the model after training")
-    parser.add_argument("--prompt", type=str, default="Once upon a time", help="Prompt for sampling")
-    parser.add_argument("--max-tokens", type=int, default=50, help="Maximum tokens to generate")
-    parser.add_argument("--temperature", type=float, default=0.8, help="Sampling temperature")
-    
-    args = parser.parse_args()
-    train_model(args)

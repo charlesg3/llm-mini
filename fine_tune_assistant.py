@@ -120,6 +120,7 @@ def train_assistant_model(args):
         val_dataset=val_dataset,
         batch_size=args.batch_size,
         checkpoint_dir=args.output_dir,
+        use_multi_gpu=args.multi_gpu if hasattr(args, 'multi_gpu') else False,
     )
     
     # Load checkpoint if specified
@@ -162,6 +163,7 @@ if __name__ == "__main__":
     parser.add_argument("--prompt", type=str, default="User: How do I implement a transformer model in PyTorch?\n\nAssistant:", help="Prompt for sampling")
     parser.add_argument("--max-tokens", type=int, default=200, help="Maximum tokens to generate")
     parser.add_argument("--temperature", type=float, default=0.7, help="Sampling temperature")
+    parser.add_argument("--multi-gpu", action="store_true", help="Use multiple GPUs for training if available")
     
     args = parser.parse_args()
     train_assistant_model(args)
